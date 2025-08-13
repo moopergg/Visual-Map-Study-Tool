@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Visual Study Map</title>
+<style>
+  :root {
+    --bg: #0f172a;          /* slate-900 */
+    --panel: #111827;       /* gray-900 */
+    --muted: #1f2937;       /* gray-800 */
+    --line: #334155;        /* slate-700 */
+    --text: #e5e7eb;        /* gray-200 */
+    --hint: #94a3b8;        /* slate-400 */
+    --accent: #22c55e;      /* green-500 */
+    --accent-2: #60a5fa;    /* blue-400 */
+    --danger: #f43f5e;      /* rose-500 */
+  }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  }
+
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, #0b1224, #0f172a);
+    border-bottom: 1px solid var(--muted);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+
+  .btn {
+    background: var(--muted);
+    border: 1px solid #2a3343;
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    user-select: none;
+    transition: transform 0.02s ease, background 0.2s ease, border-color 0.2s ease;
+  }
+  .btn:hover { background: #263042; }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { border-color: #2e4d3a; background: #153a27; }
+  .btn.primary:hover { background: #194630; }
+  .btn.accent { border-color: #2c4b70; background: #15283e; }
+  .btn.accent:hover { background: #18314c; }
+  .btn.danger { border-color: #5a1a27; background: #31121a; }
+  .btn.danger:hover { background: #3b1520; }
+  .btn.active { box-shadow: inset 0 0 0 2px var(--accent-2); }
+
+  .toolbar .spacer { flex: 1; }
+
+  .hint {
+    color: var(--hint);
+    font-size: 12px;
+    margin-left: 6px;
+  }
+
+  .wrapper {
+    position: relative;
+    height: calc(100% - 56px);
+    overflow: hidden;
+  }
+
+  .canvas {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    background:
+      linear-gradient(transparent 24px, rgba(148,163,184,0.07) 25px),
+      linear-gradient(90deg, transparent 24px, rgba(148,163,184,0.07) 25px);
+    background-size: 25px 25px;
+  }
+
+  /* SVG layer for edges is behind nodes */
+  svg.edges {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .nodes {
+    position: absolute;
+    inset: 0;
+  }
+
+  .node {
+    position: absolute;
+    min-width: 140px;
+    max-width: 280px;
+    padding: 10px 12px;
+    background: #0b1224;
+    border: 1px solid #263247;
+    border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+    cursor: move;
+    user-select: none;
+  }
+
+  .node:focus-within,
+  .node.selected {
+    outline: 2px solid var(--accent-2);
+    outline-offset: 0px;
+  }
+
+  .node .title {
+    font-weight: 600;
+    margin: 0 0 6px;
+    color: #dbeafe;
+  }
+
+  .node .content {
+    color: #cbd5e1;
+    line-height: 1.35;
+  }
+
+  .node [contenteditable="true"] {
+    outline: none;
+  }
+
+  .legend {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    background: rgba(15,23,42,0.7);
+    border: 1px solid #253149;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--hint);
+    backdrop-filter: blur(4px);
+  }
+
+  .hidden-input {
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <button id="btnNew" class="btn danger">New</button>
+    <button id="btnAdd" class="btn primary">Add node</button>
+    <button id="btnConnect" class="btn accent">Connect</button>
+    <div class="spacer"></div>
+    <button id="btnSave" class="btn">Save</button>
+    <button id="btnImport" class="btn">Import</button>
+    <input id="fileInput" class="hidden-input" type="file" accept=".json,application/json" />
+    <span class="hint">Tip: Click a node’s text to edit. Drag to move. Use Connect to draw arrows.</span>
+  </div>
+
+  <div class="wrapper">
+    <div id="canvas" class="canvas">
+      <svg id="edgeLayer" class="edges">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6aa9ff"></path>
+          </marker>
+        </defs>
+        <!-- edges (lines) go here -->
+      </svg>
+      <div id="nodeLayer" class="nodes"><!-- nodes go here --></div>
+    </div>
+
+    <div class="legend">
+      <div>Connect: click source node, then target.</div>
+      <div>Save to JSON, Import from JSON.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // --- State ---
+  const state = {
+    nodes: new Map(), // id -> { id, x, y, title, content, el }
+    edges: [],        // { from, to, el }
+    nextId: 1,
+    connectMode: false,
+    connectSource: null,
+    drag: null
+  };
+
+  // --- Elements ---
+  const canvas = document.getElementById('canvas');
+  const edgeLayer = document.getElementById('edgeLayer');
+  const nodeLayer = document.getElementById('nodeLayer');
+
+  const btnNew = document.getElementById('btnNew');
+  const btnAdd = document.getElementById('btnAdd');
+  const btnConnect = document.getElementById('btnConnect');
+  const btnSave = document.getElementById('btnSave');
+  const btnImport = document.getElementById('btnImport');
+  const fileInput = document.getElementById('fileInput');
+
+  // --- Utilities ---
+  function createNodeElement(node) {
+    const el = document.createElement('div');
+    el.className = 'node';
+    el.style.left = node.x + 'px';
+    el.style.top = node.y + 'px';
+    el.dataset.id = node.id;
+
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.contentEditable = 'true';
+    title.spellcheck = false;
+    title.textContent = node.title ?? 'Concept';
+
+    const content = document.createElement('div');
+    content.className = 'content';
+    content.contentEditable = 'true';
+    content.spellcheck = false;
+    content.textContent = node.content ?? 'Details or examples...';
+
+    el.appendChild(title);
+    el.appendChild(content);
+
+    // Drag handling
+    el.addEventListener('mousedown', (e) => {
+      // If you clicked inside editable text and are not in connect mode, do not drag immediately
+      const isEditable = e.target.isContentEditable;
+      if (state.connectMode) {
+        // In connect mode, clicking a node selects it for connections
+        handleConnectClick(node.id);
+        e.preventDefault();
+        return;
+      }
+      if (!isEditable) {
+        startDrag(e, node);
+      }
+    });
+
+    // If user tries to drag text selection, stop propagation
+    el.addEventListener('dragstart', (e) => e.preventDefault());
+
+    // Update model on text edits
+    title.addEventListener('input', () => {
+      node.title = title.textContent.trim();
+    });
+    content.addEventListener('input', () => {
+      node.content = content.textContent.trim();
+    });
+
+    // Selection visuals for connect mode
+    el.addEventListener('click', () => {
+      if (!state.connectMode) {
+        clearSelections();
+        el.classList.add('selected');
+      }
+    });
+
+    return el;
+  }
+
+  function startDrag(e, node) {
+    e.preventDefault();
+    const rect = node.el.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    state.drag = {
+      id: node.id,
+      offsetX: e.clientX - rect.left,
+      offsetY: e.clientY - rect.top,
+      canvasOffsetX: canvasRect.left + canvas.scrollLeft,
+      canvasOffsetY: canvasRect.top + canvas.scrollTop
+    };
+    window.addEventListener('mousemove', onDragMove);
+    window.addEventListener('mouseup', endDrag);
+  }
+
+  function onDragMove(e) {
+    if (!state.drag) return;
+    const node = state.nodes.get(state.drag.id);
+    if (!node) return;
+
+    // Compute new position within the scrollable canvas
+    const x = e.clientX - state.drag.canvasOffsetX - state.drag.offsetX;
+    const y = e.clientY - state.drag.canvasOffsetY - state.drag.offsetY;
+
+    node.x = Math.max(0, x);
+    node.y = Math.max(0, y);
+
+    node.el.style.left = node.x + 'px';
+    node.el.style.top = node.y + 'px';
+
+    updateEdgesForNode(node.id);
+  }
+
+  function endDrag() {
+    window.removeEventListener('mousemove', onDragMove);
+    window.removeEventListener('mouseup', endDrag);
+    state.drag = null;
+  }
+
+  function addNode(x = 120, y = 120) {
+    const id = state.nextId++;
+    const node = { id, x, y, title: 'Concept', content: 'Details or examples...' };
+    node.el = createNodeElement(node);
+    nodeLayer.appendChild(node.el);
+    state.nodes.set(id, node);
+    return node;
+  }
+
+  function addEdge(fromId, toId) {
+    if (fromId === toId) return; // no self-loop
+    // prevent duplicates
+    if (state.edges.some(e => e.from === fromId && e.to === toId)) return;
+
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('stroke', '#6aa9ff');
+    line.setAttribute('stroke-width', '2.2');
+    line.setAttribute('marker-end', 'url(#arrow)');
+    edgeLayer.appendChild(line);
+
+    const edge = { from: fromId, to: toId, el: line };
+    state.edges.push(edge);
+    updateEdgePosition(edge);
+  }
+
+  function updateEdgesForNode(nodeId) {
+    state.edges.forEach(edge => {
+      if (edge.from === nodeId || edge.to === nodeId) {
+        updateEdgePosition(edge);
+      }
+    });
+  }
+
+  function centerOfNode(node) {
+    const el = node.el;
+    const rect = el.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    const scrollX = canvas.scrollLeft;
+    const scrollY = canvas.scrollTop;
+
+    const x = rect.left - canvasRect.left + scrollX + rect.width / 2;
+    const y = rect.top - canvasRect.top + scrollY + rect.height / 2;
+    return { x, y };
+  }
+
+  function updateEdgePosition(edge) {
+    const fromNode = state.nodes.get(edge.from);
+    const toNode = state.nodes.get(edge.to);
+    if (!fromNode || !toNode) return;
+
+    const from = centerOfNode(fromNode);
+    const to = centerOfNode(toNode);
+
+    edge.el.setAttribute('x1', from.x);
+    edge.el.setAttribute('y1', from.y);
+    edge.el.setAttribute('x2', to.x);
+    edge.el.setAttribute('y2', to.y);
+  }
+
+  function handleConnectClick(nodeId) {
+    const nodeEl = state.nodes.get(nodeId)?.el;
+    if (!nodeEl) return;
+
+    if (!state.connectSource) {
+      state.connectSource = nodeId;
+      clearSelections();
+      nodeEl.classList.add('selected');
+    } else {
+      const from = state.connectSource;
+      const to = nodeId;
+      addEdge(from, to);
+      state.connectSource = null;
+      clearSelections();
+    }
+  }
+
+  function clearSelections() {
+    nodeLayer.querySelectorAll('.node.selected').forEach(n => n.classList.remove('selected'));
+  }
+
+  function setConnectMode(on) {
+    state.connectMode = on;
+    state.connectSource = null;
+    btnConnect.classList.toggle('active', on);
+    if (!on) clearSelections();
+  }
+
+  // --- Save / Load ---
+  function saveToFile() {
+    const data = {
+      meta: { app: 'Visual Study Map', version: 1 },
+      nodes: Array.from(state.nodes.values()).map(n => ({
+        id: n.id,
+        x: n.x,
+        y: n.y,
+        title: n.title ?? 'Concept',
+        content: n.content ?? ''
+      })),
+      edges: state.edges.map(e => ({ from: e.from, to: e.to }))
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    const ts = new Date();
+    const pad = v => String(v).padStart(2,'0');
+    const fname = `study-map-${ts.getFullYear()}${pad(ts.getMonth()+1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}.json`;
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    URL.revokeObjectURL(a.href);
+    a.remove();
+  }
+
+  function clearAll() {
+    // remove edges
+    state.edges.forEach(e => e.el.remove());
+    state.edges = [];
+    // remove nodes
+    state.nodes.forEach(n => n.el.remove());
+    state.nodes.clear();
+    // reset selection
+    clearSelections();
+  }
+
+  function importFromObject(data) {
+    clearAll();
+    state.nextId = 1;
+    // Recreate nodes (keep original IDs if possible)
+    const idMap = new Map(); // oldId -> newId
+    (data.nodes || []).forEach(n => {
+      const id = Number.isFinite(n.id) ? n.id : state.nextId++;
+      if (id >= state.nextId) state.nextId = id + 1;
+      const node = { id, x: n.x ?? 100, y: n.y ?? 100, title: n.title ?? 'Concept', content: n.content ?? '' };
+      node.el = createNodeElement(node);
+      nodeLayer.appendChild(node.el);
+      state.nodes.set(id, node);
+      idMap.set(n.id, id);
+    });
+    // Recreate edges
+    (data.edges || []).forEach(e => {
+      const from = idMap.get(e.from) ?? e.from;
+      const to = idMap.get(e.to) ?? e.to;
+      if (state.nodes.has(from) && state.nodes.has(to)) addEdge(from, to);
+    });
+    // After layout, update all edge positions
+    requestAnimationFrame(() => {
+      state.edges.forEach(updateEdgePosition);
+    });
+  }
+
+  function handleFileImport(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        importFromObject(data);
+      } catch (err) {
+        alert('Could not parse the file. Please ensure it is a valid JSON map.');
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // --- Events ---
+  btnAdd.addEventListener('click', () => {
+    const scrollX = canvas.scrollLeft;
+    const scrollY = canvas.scrollTop;
+    // Add near top-left of current viewport
+    addNode(scrollX + 80, scrollY + 80);
+  });
+
+  btnConnect.addEventListener('click', () => {
+    setConnectMode(!state.connectMode);
+  });
+
+  btnNew.addEventListener('click', () => {
+    if (confirm('Start a new map? This will clear the current canvas.')) {
+      setConnectMode(false);
+      clearAll();
+    }
+  });
+
+  btnSave.addEventListener('click', () => saveToFile());
+
+  btnImport.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) handleFileImport(file);
+    fileInput.value = '';
+  });
+
+  // Keep edges aligned when the canvas scrolls (centers change relative to SVG viewport)
+  canvas.addEventListener('scroll', () => {
+    state.edges.forEach(updateEdgePosition);
+  });
+
+  // Resize observer to keep edges accurate after node size changes (e.g., editing text)
+  const resizeObserver = new ResizeObserver(() => {
+    state.edges.forEach(updateEdgePosition);
+  });
+  const nodeObserver = new MutationObserver(() => {
+    // Re-observe nodes if DOM changes
+    resizeObserver.disconnect();
+    state.nodes.forEach(n => resizeObserver.observe(n.el));
+    state.edges.forEach(updateEdgePosition);
+  });
+  nodeObserver.observe(nodeLayer, { childList: true, subtree: true });
+
+  // Initial node to get started
+  const n1 = addNode(120, 120);
+  n1.title = 'Main Topic';
+  n1.content = 'Double-click to edit';
+  n1.el.querySelector('.title').textContent = n1.title;
+  n1.el.querySelector('.content').textContent = n1.content;
+
+})();
+</script>
+</body>
+</html>
+```
